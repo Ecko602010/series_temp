@@ -20,8 +20,8 @@ st.set_page_config(page_title="Projet Série Temporelle (ARIMA/SARIMA)", layout=
 st.title("📈 Application Streamlit - Série temporelle (ARIMA / SARIMA)")
 st.write(
     """
-Charge un **CSV/XLSX**, visualise la série + STL, teste la stationnarité (ADF),
-entraîne un modèle **ARIMA** ou **SARIMA**, puis produit une **prévision**.
+Chargement d'un **CSV/XLSX**, visualisation de la série + STL, teste de la stationnarité (ADF),
+entraînement d'un modèle **ARIMA** ou **SARIMA**, puis prévision.
 """
 )
 
