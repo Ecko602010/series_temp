@@ -34,7 +34,6 @@ de la visualiser (courbe + STL), de tester la stationnarité (ADF), puis d'entra
 """
 )
 
-
 # ------------------------------------------------------------
 # FONCTIONS UTILES
 # ------------------------------------------------------------
@@ -58,7 +57,7 @@ def read_file(uploaded_file) -> pd.DataFrame:
 
     raw = uploaded_file.getvalue()
 
-    # Détection encodage (optionnel mais très utile)
+    # Détection encodage (utile pour latin-1/cp1252)
     enc = "utf-8"
     try:
         import chardet
@@ -84,10 +83,41 @@ def read_file(uploaded_file) -> pd.DataFrame:
     raise ValueError("Impossible de lire le CSV : vérifie séparateur/encodage.")
 
 
+def clean_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Nettoie les noms de colonnes :
+    - enlève espaces au début/fin
+    - remplace espaces insécables (Excel) par espaces normaux
+    - si doublons, rend les noms uniques (Date, Date.1, etc.)
+    """
+    df = df.copy()
+
+    # Normaliser les noms
+    df.columns = (
+        df.columns.astype(str)
+        .str.replace("\u00A0", " ", regex=False)  # NBSP -> espace
+        .str.strip()
+    )
+
+    # Rendre uniques si doublons
+    if df.columns.duplicated().any():
+        # Méthode robuste : ajoute suffixes .1, .2...
+        new_cols = []
+        counts = {}
+        for c in df.columns:
+            if c not in counts:
+                counts[c] = 0
+                new_cols.append(c)
+            else:
+                counts[c] += 1
+                new_cols.append(f"{c}.{counts[c]}")
+        df.columns = new_cols
+
+    return df
+
+
 def parse_datetime_column(df: pd.DataFrame, date_col: str) -> pd.DataFrame:
-    """
-    Convertit la colonne date en datetime (si possible), supprime les lignes invalides, trie.
-    """
+    """Convertit la colonne date en datetime, supprime invalides, trie."""
     df = df.copy()
     df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
     df = df.dropna(subset=[date_col])
@@ -104,14 +134,12 @@ def to_timeseries(df: pd.DataFrame, date_col: str, value_col: str, freq: str) ->
     """
     df = df.copy()
 
-    # Sécurité : si value_col n'existe pas (KeyError typique)
+    # Sécurité : si value_col n'existe pas
     if value_col not in df.columns:
-        raise KeyError(
-            f"Colonne valeur '{value_col}' introuvable. Colonnes dispo : {list(df.columns)}"
-        )
+        raise KeyError(f"Colonne valeur '{value_col}' introuvable. Colonnes : {list(df.columns)}")
 
     # Conversion numérique robuste :
-    # - gère virgules décimales "12,3" -> "12.3"
+    # - gère virgule décimale "12,3" -> "12.3"
     df[value_col] = df[value_col].astype(str).str.replace(",", ".", regex=False)
     df[value_col] = pd.to_numeric(df[value_col], errors="coerce")
     df = df.dropna(subset=[value_col])
@@ -119,10 +147,10 @@ def to_timeseries(df: pd.DataFrame, date_col: str, value_col: str, freq: str) ->
     # Passage en index temporel
     df = df.set_index(date_col)
 
-    # Resampling à une fréquence régulière
+    # Resampling à une fréquence régulière (moyenne)
     ts = df[value_col].resample(freq).mean()
 
-    # Interpolation des valeurs manquantes (si trous après resample)
+    # Interpolation des valeurs manquantes
     ts = ts.interpolate(method="time")
 
     return ts
@@ -202,7 +230,6 @@ def forecast_and_plot(ts: pd.Series, fitted_model, steps: int, show_last_n: int)
     fig1, ax1 = plt.subplots(figsize=(10, 4))
     ax1.plot(ts_clean.index, ts_clean.values, label="Observé")
     ax1.plot(forecast_mean.index, forecast_mean.values, label="Prévision")
-
     ax1.fill_between(
         forecast_ci.index,
         forecast_ci.iloc[:, 0],
@@ -250,13 +277,10 @@ if uploaded_file is None:
     st.info("⬅️ Commence par uploader un fichier CSV ou Excel dans la barre latérale.")
     st.stop()
 
-# Lecture du fichier
+# Lecture + nettoyage colonnes
 try:
     df = read_file(uploaded_file)
-
-    # Nettoyage des noms de colonnes (Excel peut ajouter des espaces invisibles)
-    df.columns = df.columns.astype(str).str.strip()
-
+    df = clean_columns(df)
 except Exception as e:
     st.error(f"Erreur lecture fichier : {e}")
     st.stop()
@@ -264,26 +288,39 @@ except Exception as e:
 st.subheader("Aperçu des données")
 st.dataframe(df.head(20))
 
-# Sélection colonnes
+# ------------------------------------------------------------
+# SELECTION COLONNES (avec blocage date == valeur)
+# ------------------------------------------------------------
 st.sidebar.subheader("2) Sélection des colonnes")
 columns = df.columns.tolist()
 
-date_col = st.sidebar.selectbox("Colonne Date/Temps", options=columns)
+# IMPORTANT : utiliser des keys pour éviter les effets mémoire Streamlit
+date_col = st.sidebar.selectbox("Colonne Date/Temps", options=columns, key="date_col")
 
-# IMPORTANT : empêcher value_col == date_col (cause KeyError typique)
+# Exclure la colonne date de la liste des valeurs
 value_options = [c for c in columns if c != date_col]
 if not value_options:
-    st.error("Impossible : il n'y a qu'une seule colonne, il faut au moins une date + une valeur.")
+    st.error("Il faut au moins 2 colonnes : une date + une valeur numérique.")
     st.stop()
 
-value_col = st.sidebar.selectbox("Colonne Valeur (numérique)", options=value_options)
+# Reset automatique si Streamlit avait gardé une ancienne valeur = date
+if "value_col" in st.session_state and st.session_state["value_col"] == date_col:
+    st.session_state["value_col"] = value_options[0]
 
-# Sécurité supplémentaire (au cas où)
+value_col = st.sidebar.selectbox(
+    "Colonne Valeur (numérique)",
+    options=value_options,
+    key="value_col"
+)
+
+# Sécurité ultime
 if date_col == value_col:
     st.error("La colonne Date/Temps et la colonne Valeur doivent être différentes.")
     st.stop()
 
-# Fréquence
+# ------------------------------------------------------------
+# FREQUENCE
+# ------------------------------------------------------------
 st.sidebar.subheader("3) Fréquence de la série")
 freq = st.sidebar.selectbox(
     "Resampling (pandas freq)",
@@ -301,13 +338,13 @@ except Exception as e:
     st.stop()
 
 # ------------------------------------------------------------
-# VISUALISATION : Série originale
+# VISUALISATION
 # ------------------------------------------------------------
 st.subheader("📌 Série temporelle originale")
 plot_series(ts, "Série originale (après mise en forme + resampling)")
 
 # ------------------------------------------------------------
-# STL decomposition
+# STL
 # ------------------------------------------------------------
 st.subheader("🧩 Décomposition STL (tendance, saisonnalité, résidu)")
 
@@ -323,101 +360,20 @@ period = st.number_input(
 
 try:
     stl_res = stl_decompose(ts, period=period)
-
     fig, axes = plt.subplots(4, 1, figsize=(10, 8), sharex=True)
     axes[0].plot(stl_res.observed); axes[0].set_title("Observed"); axes[0].grid(True)
     axes[1].plot(stl_res.trend); axes[1].set_title("Trend (tendance)"); axes[1].grid(True)
     axes[2].plot(stl_res.seasonal); axes[2].set_title("Seasonal (saisonnalité)"); axes[2].grid(True)
     axes[3].plot(stl_res.resid); axes[3].set_title("Residual (résidu)"); axes[3].grid(True)
-
     plt.tight_layout()
     st.pyplot(fig)
-
 except Exception as e:
     st.warning(f"Impossible de faire la STL decomposition : {e}")
 
 # ------------------------------------------------------------
-# ADF Test
+# ADF
 # ------------------------------------------------------------
 st.subheader("🧪 Test de stationnarité (ADF)")
-
 try:
     adf_res = adf_test(ts)
-
     col1, col2 = st.columns(2)
-    with col1:
-        st.metric("ADF Statistic", f"{adf_res['statistic']:.4f}")
-        st.metric("p-value", f"{adf_res['pvalue']:.6f}")
-    with col2:
-        st.write("Valeurs critiques :")
-        st.json(adf_res["critical_values"])
-
-    if adf_res["pvalue"] < 0.05:
-        st.success("✅ Série probablement stationnaire (p-value < 0.05 : rejet de H0).")
-    else:
-        st.warning("⚠️ Série probablement NON stationnaire (p-value ≥ 0.05). Ajuste d (et D pour SARIMA).")
-
-except Exception as e:
-    st.error(f"Erreur test ADF : {e}")
-
-# ------------------------------------------------------------
-# MODELING
-# ------------------------------------------------------------
-st.subheader("🤖 Modélisation (ARIMA / SARIMA)")
-
-st.sidebar.subheader("4) Choix du modèle")
-model_type = st.sidebar.selectbox("Modèle", options=["ARIMA", "SARIMA"])
-
-st.sidebar.subheader("5) Paramètres du modèle")
-p = st.sidebar.number_input("p (AR)", min_value=0, max_value=10, value=1, step=1)
-d = st.sidebar.number_input("d (Diff)", min_value=0, max_value=3, value=1, step=1)
-q = st.sidebar.number_input("q (MA)", min_value=0, max_value=10, value=1, step=1)
-order = (int(p), int(d), int(q))
-
-if model_type == "SARIMA":
-    P = st.sidebar.number_input("P (Seasonal AR)", min_value=0, max_value=10, value=1, step=1)
-    D = st.sidebar.number_input("D (Seasonal Diff)", min_value=0, max_value=3, value=1, step=1)
-    Q = st.sidebar.number_input("Q (Seasonal MA)", min_value=0, max_value=10, value=1, step=1)
-    s = st.sidebar.number_input("s (Season length)", min_value=1, value=int(default_period), step=1)
-    seasonal_order = (int(P), int(D), int(Q), int(s))
-else:
-    seasonal_order = (0, 0, 0, 0)
-
-st.sidebar.subheader("6) Prévision")
-steps = st.sidebar.number_input("Nombre de pas dans le futur", min_value=1, max_value=500, value=30, step=1)
-show_last_n = st.sidebar.number_input("Comparaison sur les N derniers points", min_value=10, max_value=500, value=60, step=10)
-
-run = st.button("🚀 Entraîner le modèle et prédire")
-
-if run:
-    with st.spinner("Entraînement du modèle..."):
-        try:
-            fitted = fit_model(ts, model_type=model_type, order=order, seasonal_order=seasonal_order)
-            st.success("✅ Modèle entraîné avec succès !")
-
-            st.subheader("Résumé du modèle (statsmodels)")
-            st.text(fitted.summary())
-
-            st.subheader("📊 Résultats : Prévision & Comparaisons")
-            forecast_mean, forecast_ci = forecast_and_plot(ts, fitted_model=fitted, steps=int(steps), show_last_n=int(show_last_n))
-
-            st.subheader("Table de prévision")
-            out_df = pd.DataFrame(
-                {
-                    "forecast": forecast_mean,
-                    "lower_ci": forecast_ci.iloc[:, 0],
-                    "upper_ci": forecast_ci.iloc[:, 1],
-                }
-            )
-            st.dataframe(out_df)
-
-            csv_data = out_df.to_csv(index=True).encode("utf-8")
-            st.download_button(
-                label="⬇️ Télécharger les prévisions (CSV)",
-                data=csv_data,
-                file_name="forecast.csv",
-                mime="text/csv",
-            )
-
-        except Exception as e:
-            st.error(f"❌ Erreur pendant l'entraînement ou la prévision : {e}")
