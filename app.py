@@ -374,6 +374,23 @@ except Exception as e:
 # ADF
 # ------------------------------------------------------------
 st.subheader("🧪 Test de stationnarité (ADF)")
+
 try:
     adf_res = adf_test(ts)
+
     col1, col2 = st.columns(2)
+    with col1:
+        st.metric("ADF Statistic", f"{adf_res['statistic']:.4f}")
+        st.metric("p-value", f"{adf_res['pvalue']:.6f}")
+    with col2:
+        st.write("Valeurs critiques :")
+        st.json(adf_res["critical_values"])
+
+    if adf_res["pvalue"] < 0.05:
+        st.success("✅ Série probablement stationnaire (p-value < 0.05 : rejet de H0).")
+    else:
+        st.warning("⚠️ Série probablement NON stationnaire (p-value ≥ 0.05). Ajuste d (et D pour SARIMA).")
+
+except Exception as e:
+    st.error(f"Erreur test ADF : {e}")
+
