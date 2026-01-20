@@ -24,6 +24,11 @@ Chargement d'un **CSV/XLSX**, visualisation de la série + STL, teste de la stat
 entraînement d'un modèle **ARIMA** ou **SARIMA**, puis prévision.
 """
 )
+st.write(
+    """
+Par Julient GOUAULT
+"""
+)
 
 # ------------------------------------------------------------
 # FONCTIONS
