@@ -26,7 +26,7 @@ entraînement d'un modèle **ARIMA** ou **SARIMA**, puis prévision.
 )
 st.write(
     """
-Par Julient GOUAULT
+Par Julien GOUAULT
 """
 )
 
